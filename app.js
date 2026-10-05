@@ -9,8 +9,18 @@
 const $ = id => document.getElementById(id);
 
 /* ===== ① 常量 ===== */
-const STORAGE_KEY = 'trainingLog.data';
+// Supabase 项目配置 —— 部署前必须填入真实值（见 README-部署说明.md）
+const SUPABASE_URL = 'https://padfgcibwsuccdqbpofi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhZGZnY2lid3N1Y2NkcWJwb2ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTExNjY3NTUsImV4cCI6MjEwNjc0Mjc1NX0.bs4b6zgQ4W1uuYmjqCHfnw8U-IpMkOUT9IHa2Ov_Gfg';
+
 const CURRENT_VERSION = 1;
+
+// 运行期账号状态
+let db = null;
+let currentUser = null;
+let currentUsername = '';
+let authMode = 'login';
+let appInited = false;
 
 const MUSCLE_GROUPS = ['胸', '背', '腿', '臀', '肩', '手臂', '核心', '其他'];
 
@@ -69,7 +79,6 @@ const METRICS = [
 ];
 
 /* ===== ② 存储层 ===== */
-let storageOK = true;
 let data = null;
 
 function freshData() {
@@ -116,7 +125,21 @@ function cleanWorkout(w) {
           const cw = clamp(weight, 0, 2000);
           const cr = Math.round(clamp(reps, 1, 200));
           if (!isFinite(cr) || cr < 1) continue;
-          sets.push({ weight: cw, reps: cr, rpe: cleanRpe(s.rpe) });
+          const drops = [];
+          if (Array.isArray(s.drops)) {
+            for (const d of s.drops) {
+              if (!d || typeof d !== 'object') continue;
+              const dw = toNum(d.weight), dr = toNum(d.reps);
+              if (dw === null || dr === null) continue;
+              const cdw = clamp(dw, 0, 2000);
+              const cdr = Math.round(clamp(dr, 1, 200));
+              if (!isFinite(cdr) || cdr < 1) continue;
+              drops.push({ weight: cdw, reps: cdr });
+            }
+          }
+          const set = { weight: cw, reps: cr, rpe: cleanRpe(s.rpe) };
+          if (drops.length) set.drops = drops;
+          sets.push(set);
         }
       }
       if (!sets.length) continue;
@@ -161,33 +184,25 @@ function sanitizeData(obj) {
   return out;
 }
 
-function setStorageUnavailable() {
-  storageOK = false;
-  const b = $('storage-banner'), w = $('storage-warn');
-  if (b) b.hidden = false;
-  if (w) w.hidden = false;
-}
-
 function save() {
-  if (!storageOK) return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {
-    setStorageUnavailable();
-    toast('浏览器存储不可用，请立即导出备份！', 'warn');
-  }
+  if (!db || !currentUser) return;
+  db
+    .from('user_data')
+    .upsert({ user_id: currentUser.id, data, updated_at: new Date().toISOString() })
+    .then(({ error }) => {
+      if (error) toast('保存到云端失败，请检查网络后重试', 'warn');
+    });
 }
 
-function loadData() {
-  let raw = null;
-  try { raw = localStorage.getItem(STORAGE_KEY); } catch (e) { setStorageUnavailable(); }
-  if (raw === null) return freshData();
-  let obj = null;
-  try { obj = JSON.parse(raw); } catch (e) { return freshData(); }
-  if (isFinite(obj.version) && obj.version > CURRENT_VERSION) {
-    setTimeout(() => toast('数据文件来自更新版本，已尽力导入兼容字段', 'warn'), 0);
-  }
-  return sanitizeData(obj);
+async function loadCloudData() {
+  const { data: row, error } = await db
+    .from('user_data')
+    .select('data')
+    .eq('user_id', currentUser.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!row) return freshData();
+  return sanitizeData(row.data);
 }
 
 /* ===== ③ 工具 ===== */
@@ -229,6 +244,16 @@ function fmtNum(v, digits = 1) {
 function fmtKg(v) { return fmtNum(v) + ' kg'; }
 function fmtPct(p) { return (p > 0 ? '+' : '') + p.toFixed(1) + '%'; }
 function epley(w, r) { return r === 1 ? w : w * (1 + r / 30); }
+
+// 力竭递减组（drop set）：一组内可含多段减重分段。segments = 主段 + 各递减段
+function setSegments(s) {
+  const segs = [{ weight: s.weight, reps: s.reps }];
+  if (Array.isArray(s.drops)) for (const d of s.drops) segs.push({ weight: d.weight, reps: d.reps });
+  return segs;
+}
+function setVolume(s) {
+  return setSegments(s).reduce((t, x) => t + x.weight * x.reps, 0);
+}
 function median(arr) {
   const a = [...arr].sort((x, y) => x - y);
   const m = a.length >> 1;
@@ -345,7 +370,7 @@ function fillWorkout(w) {
   banner.querySelector('b').textContent = shortDate(w.date);
   clearExercises();
   for (const ex of w.exercises) {
-    addExerciseCard(ex.name, ex.muscleGroups, ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rpe: s.rpe == null ? '' : s.rpe })));
+    addExerciseCard(ex.name, ex.muscleGroups, ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rpe: s.rpe == null ? '' : s.rpe, drops: s.drops })));
   }
   updateRecordEmptyState();
 }
@@ -371,7 +396,7 @@ function addExerciseCard(name, groups, sets) {
       <button type="button" class="icon-btn ex-del" title="移除动作">✕</button>
     </div>
     <div class="ex-groups">${groupChipsHtml(groups)}</div>
-    <div class="set-head"><span></span><span>重量 kg</span><span>次数</span><span>RPE</span><span></span></div>
+    <div class="set-head"><span></span><span>重量 kg</span><span>次数</span><span>RPE</span><span></span><span></span></div>
     <div class="set-rows"></div>
     <button type="button" class="btn sm ghost add-set">＋ 添加一组</button>
     <div class="subtotal"></div>`;
@@ -392,17 +417,22 @@ function addSetRow(card, preset) {
   const row = document.createElement('div');
   row.className = 'set-row';
   row.innerHTML = `
-    <span class="set-num"></span>
-    <input class="set-weight" type="text" inputmode="decimal" placeholder="重量">
-    <input class="set-reps" type="text" inputmode="numeric" placeholder="次数">
-    <select class="set-rpe">${rpeOptionsHtml('')}</select>
-    <button type="button" class="icon-btn set-del" title="删除此组">✕</button>`;
+    <div class="set-main">
+      <span class="set-num"></span>
+      <input class="set-weight" type="text" inputmode="decimal" placeholder="重量">
+      <input class="set-reps" type="text" inputmode="numeric" placeholder="次数">
+      <select class="set-rpe">${rpeOptionsHtml('')}</select>
+      <button type="button" class="icon-btn drop-add" title="添加递减组（力竭后减重继续做）">＋递减</button>
+      <button type="button" class="icon-btn set-del" title="删除此组">✕</button>
+    </div>
+    <div class="set-drops"></div>`;
   const wi = row.querySelector('.set-weight');
   const ri = row.querySelector('.set-reps');
   if (preset) {
     wi.value = preset.weight;
     ri.value = preset.reps;
     row.querySelector('.set-rpe').value = String(preset.rpe === undefined || preset.rpe === null ? '' : preset.rpe);
+    if (Array.isArray(preset.drops)) for (const d of preset.drops) addDropRow(row, d);
   } else {
     const prev = rows.querySelector('.set-row:last-of-type');
     if (prev) {
@@ -415,20 +445,61 @@ function addSetRow(card, preset) {
   return row;
 }
 
+function addDropRow(setRow, preset) {
+  const box = setRow.querySelector('.set-drops');
+  const drop = document.createElement('div');
+  drop.className = 'set-drop';
+  drop.innerHTML = `
+    <span class="drop-arrow">↳</span>
+    <input class="drop-weight" type="text" inputmode="decimal" placeholder="重量">
+    <input class="drop-reps" type="text" inputmode="numeric" placeholder="次数">
+    <span></span><span></span>
+    <button type="button" class="icon-btn drop-del" title="删除此递减段">✕</button>`;
+  const wi = drop.querySelector('.drop-weight');
+  const ri = drop.querySelector('.drop-reps');
+  if (preset) {
+    wi.value = preset.weight;
+    ri.value = preset.reps;
+  } else {
+    const prevDrop = box.querySelector('.set-drop:last-of-type');
+    let sw = '', sr = '';
+    if (prevDrop) {
+      sw = prevDrop.querySelector('.drop-weight').value;
+      sr = prevDrop.querySelector('.drop-reps').value;
+    } else {
+      sw = setRow.querySelector('.set-weight').value;
+      sr = setRow.querySelector('.set-reps').value;
+    }
+    wi.value = sw;
+    ri.value = sr;
+  }
+  box.appendChild(drop);
+  return drop;
+}
+
 function updateSubtotal(card) {
-  let count = 0, volume = 0, best = null;
+  let count = 0, dropCount = 0, volume = 0, best = null;
   for (const row of card.querySelectorAll('.set-row')) {
     const w = parseFloat(row.querySelector('.set-weight').value);
     const r = parseInt(row.querySelector('.set-reps').value, 10);
     if (!isFinite(w) || w < 0 || !isFinite(r) || r < 1) continue;
     count++;
     volume += w * r;
-    const e1 = epley(w, r);
+    let e1 = epley(w, r);
+    for (const drop of row.querySelectorAll('.set-drop')) {
+      const dw = parseFloat(drop.querySelector('.drop-weight').value);
+      const dr = parseInt(drop.querySelector('.drop-reps').value, 10);
+      if (!isFinite(dw) || dw < 0 || !isFinite(dr) || dr < 1) continue;
+      dropCount++;
+      volume += dw * dr;
+      const de = epley(dw, dr);
+      if (de > e1) e1 = de;
+    }
     if (best === null || e1 > best) best = e1;
   }
   const el = card.querySelector('.subtotal');
   el.textContent = count
-    ? `共 ${count} 组 · 总容量 ${fmtNum(volume)} kg · 最佳估算1RM ≈ ${fmtNum(best)} kg`
+    ? `共 ${count} 组${dropCount ? ' · 含 ' + dropCount + ' 段递减' : ''} · 总容量 ${fmtNum(volume)} kg · 最佳估算1RM ≈ ${fmtNum(best)} kg`
     : '';
 }
 
@@ -454,20 +525,49 @@ function collectRecord() {
       wi.classList.remove('invalid');
       ri.classList.remove('invalid');
       const wRaw = wi.value.trim(), rRaw = ri.value.trim();
-      if (!wRaw && !rRaw) return; // 整行空白 = 未使用的预填槽位，跳过
+      if (!wRaw && !rRaw) {
+        // 主段空白：若填了递减段，需先补全主组
+        const hasDrop = [...row.querySelectorAll('.set-drop')].some(d =>
+          d.querySelector('.drop-weight').value.trim() || d.querySelector('.drop-reps').value.trim());
+        if (hasDrop) {
+          wi.classList.add('invalid');
+          ri.classList.add('invalid');
+          if (!error) error = `第 ${ci + 1} 个动作第 ${si + 1} 组：填写递减段前请先填主组重量与次数`;
+        }
+        return; // 整行空白 = 未使用的预填槽位，跳过
+      }
       const w = parseFloat(wRaw), r = parseInt(rRaw, 10);
-      if (wRaw === '' || rRaw === '' || !isFinite(w) || w < 0 || !isFinite(r) || r < 1) {
+      if (!isFinite(w) || w < 0 || !isFinite(r) || r < 1) {
         wi.classList.add('invalid');
         ri.classList.add('invalid');
         if (!error) error = `第 ${ci + 1} 个动作第 ${si + 1} 组未填完整`;
         return;
       }
       const rpeRaw = row.querySelector('.set-rpe').value;
-      sets.push({
+      const drops = [];
+      row.querySelectorAll('.set-drop').forEach((drop, di) => {
+        const dwi = drop.querySelector('.drop-weight');
+        const dri = drop.querySelector('.drop-reps');
+        dwi.classList.remove('invalid');
+        dri.classList.remove('invalid');
+        const dwRaw = dwi.value.trim(), drRaw = dri.value.trim();
+        if (!dwRaw && !drRaw) return; // 空递减段跳过
+        const dw = parseFloat(dwRaw), dr = parseInt(drRaw, 10);
+        if (!isFinite(dw) || dw < 0 || !isFinite(dr) || dr < 1) {
+          dwi.classList.add('invalid');
+          dri.classList.add('invalid');
+          if (!error) error = `第 ${ci + 1} 个动作第 ${si + 1} 组第 ${di + 1} 段递减未填完整`;
+          return;
+        }
+        drops.push({ weight: clamp(dw, 0, 2000), reps: clamp(Math.round(dr), 1, 200) });
+      });
+      const set = {
         weight: clamp(w, 0, 2000),
         reps: clamp(Math.round(r), 1, 200),
         rpe: rpeRaw === '' ? null : parseFloat(rpeRaw),
-      });
+      };
+      if (drops.length) set.drops = drops;
+      sets.push(set);
     });
     if (!sets.length && !error) error = `第 ${ci + 1} 个动作（${name}）至少填写一组`;
     exercises.push({ id: uid('e'), name, muscleGroups: groups, sets });
@@ -524,7 +624,7 @@ function copyLastWorkout() {
   $('rec-error').hidden = true;
   clearExercises();
   for (const ex of last.exercises) {
-    addExerciseCard(ex.name, ex.muscleGroups, ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rpe: s.rpe == null ? '' : s.rpe })));
+    addExerciseCard(ex.name, ex.muscleGroups, ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rpe: s.rpe == null ? '' : s.rpe, drops: s.drops })));
   }
   updateRecordEmptyState();
   toast('已复制上次训练，日期已设为今天');
@@ -620,14 +720,22 @@ function historyCardHtml(w) {
   const rows = w.exercises.map(ex => {
     let best = null, exVolume = 0, top = null, topReps = -1;
     for (const s of ex.sets) {
-      const e1 = epley(s.weight, s.reps);
-      if (best === null || e1 > best) best = e1;
-      exVolume += s.weight * s.reps;
-      if (top === null || s.weight > top || (s.weight === top && s.reps > topReps)) { top = s.weight; topReps = s.reps; }
+      for (const seg of setSegments(s)) {
+        const e1 = epley(seg.weight, seg.reps);
+        if (best === null || e1 > best) best = e1;
+        exVolume += seg.weight * seg.reps;
+        if (top === null || seg.weight > top || (seg.weight === top && seg.reps > topReps)) { top = seg.weight; topReps = seg.reps; }
+      }
     }
-    const setRows = ex.sets.map((s, i) =>
-      `<tr><td>${i + 1}</td><td class="num">${fmtNum(s.weight)}</td><td class="num">${s.reps}</td><td class="num">${s.rpe == null ? '–' : s.rpe}</td><td class="num">${fmtNum(epley(s.weight, s.reps))}</td></tr>`
-    ).join('');
+    const setRows = ex.sets.map((s, i) => {
+      let rows = `<tr><td>${i + 1}</td><td class="num">${fmtNum(s.weight)}</td><td class="num">${s.reps}</td><td class="num">${s.rpe == null ? '–' : s.rpe}</td><td class="num">${fmtNum(epley(s.weight, s.reps))}</td></tr>`;
+      if (Array.isArray(s.drops)) {
+        for (const d of s.drops) {
+          rows += `<tr class="drop-row"><td>↳</td><td class="num">${fmtNum(d.weight)}</td><td class="num">${d.reps}</td><td class="num">–</td><td class="num">${fmtNum(epley(d.weight, d.reps))}</td></tr>`;
+        }
+      }
+      return rows;
+    }).join('');
     return `
       <div class="hist-ex">
         <div class="hist-ex-head"><b>${escapeHtml(ex.name)}</b><span class="hist-ex-meta">${ex.sets.length} 组 · 容量 ${fmtNum(exVolume)} kg · 最重 ${fmtNum(top)} kg · 最佳1RM ${fmtNum(best)} kg</span></div>
@@ -752,10 +860,12 @@ function exerciseSessions(name) {
         if (ex.name !== name) continue;
         let e1 = null, vol = 0, top = null, topReps = -1, topRpe = null;
         for (const s of ex.sets) {
-          const e = epley(s.weight, s.reps);
-          if (e1 === null || e > e1) e1 = e;
-          vol += s.weight * s.reps;
-          if (top === null || s.weight > top || (s.weight === top && s.reps > topReps)) { top = s.weight; topReps = s.reps; topRpe = s.rpe; }
+          for (const seg of setSegments(s)) {
+            const e = epley(seg.weight, seg.reps);
+            if (e1 === null || e > e1) e1 = e;
+            vol += seg.weight * seg.reps;
+            if (top === null || seg.weight > top || (seg.weight === top && seg.reps > topReps)) { top = seg.weight; topReps = seg.reps; topRpe = s.rpe; }
+          }
         }
         out.push({ date: w.date, isDeload: !!w.isDeload, e1rm: e1, volume: vol, top, topReps, topRpe, sets: ex.sets.length });
       }
@@ -875,7 +985,7 @@ function renderProgress(body) {
   }
   html += `<div class="card" id="prog-detail"></div>
     <details class="card details-card"><summary>口径说明</summary>
-      <p>估算 1RM 使用 Epley 公式：重量 × (1 + 次数/30)。总容量 = Σ(重量 × 次数)。变化率与上一次非减载训练对比，±1% 以内视为持平。长期趋势取最近 2 次与再之前 2 次估算 1RM 均值的对比。减载周不参与对比基线，但会显示在趋势图中（空心点）。</p>
+      <p>估算 1RM 使用 Epley 公式：重量 × (1 + 次数/30)。总容量 = Σ(重量 × 次数)，力竭递减组各分段均计入总容量，最重一组取递减组的主段重量。变化率与上一次非减载训练对比，±1% 以内视为持平。长期趋势取最近 2 次与再之前 2 次估算 1RM 均值的对比。减载周不参与对比基线，但会显示在趋势图中（空心点）。</p>
     </details>`;
   body.innerHTML = html;
   body.querySelectorAll('.prog-row').forEach(elRow => {
@@ -1358,10 +1468,12 @@ function prsInWindow(start, end) {
     for (const ex of w.exercises) {
       let e1 = null, vol = 0, top = null, topReps = -1;
       for (const s of ex.sets) {
-        const e = epley(s.weight, s.reps);
-        if (e1 === null || e > e1) e1 = e;
-        vol += s.weight * s.reps;
-        if (top === null || s.weight > top || (s.weight === top && s.reps > topReps)) { top = s.weight; topReps = s.reps; }
+        for (const seg of setSegments(s)) {
+          const e = epley(seg.weight, seg.reps);
+          if (e1 === null || e > e1) e1 = e;
+          vol += seg.weight * seg.reps;
+          if (top === null || seg.weight > top || (seg.weight === top && seg.reps > topReps)) { top = seg.weight; topReps = seg.reps; }
+        }
       }
       const bucket = (w.date >= start && w.date <= end) ? inWin : before;
       if (!bucket[ex.name]) bucket[ex.name] = { e1rm: -Infinity, volume: -Infinity, top: -Infinity };
@@ -1396,7 +1508,7 @@ function renderWeeklySummary(body) {
     for (const ex of w.exercises) {
       const hc = hardSetsOf(ex, maxW).length;
       totalSets += hc;
-      for (const s of ex.sets) totalVolume += s.weight * s.reps;
+      for (const s of ex.sets) totalVolume += setVolume(s);
       for (const g of ex.muscleGroups) { groupSets[g] += hc; groupDays[g].add(w.date); }
     }
   }
@@ -1443,7 +1555,7 @@ function renderSettings() {
   const box = $('import-preview');
   if (box && !state.pendingImport) box.innerHTML = '';
   const st = $('storage-status');
-  if (st) st.textContent = storageOK ? '浏览器存储正常' : '⚠️ 存储不可用';
+  if (st) st.textContent = '云端存储正常 · 账号：' + (currentUsername || '…');
 }
 
 function exportBackup() {
@@ -1520,9 +1632,195 @@ function doOverwriteImport() {
   toast('已用导入数据覆盖当前数据');
 }
 
+/* ===== ⑩.6 账号与云端 ===== */
+function initSupabase() {
+  db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
+
+function isSupabaseConfigured() {
+  return SUPABASE_URL && !SUPABASE_URL.includes('YOUR-PROJECT')
+    && SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes('YOUR-ANON-KEY');
+}
+
+function genId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+function validUsername(u) {
+  return /^[一-龥A-Za-z0-9_]{2,20}$/.test(u);
+}
+
+function setAuthError(msg) {
+  const el = $('auth-error');
+  el.textContent = msg || '';
+  el.hidden = !msg;
+}
+
+function setAuthBusy(busy) {
+  const btn = $('auth-submit');
+  btn.disabled = busy;
+  btn.textContent = busy ? '请稍候…' : (authMode === 'register' ? '注册' : '登录');
+}
+
+function showAuth(mode) {
+  authMode = mode || 'login';
+  $('auth-screen').hidden = false;
+  document.querySelectorAll('.auth-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === authMode));
+  $('auth-confirm-wrap').hidden = authMode !== 'register';
+  $('auth-username').value = '';
+  $('auth-password').value = '';
+  $('auth-confirm').value = '';
+  setAuthError('');
+  setAuthBusy(false);
+  $('auth-username').focus();
+}
+
+function hideAuth() { $('auth-screen').hidden = true; }
+
+function updateUserBar() {
+  const bar = $('user-bar');
+  bar.hidden = false;
+  $('user-name').textContent = '👤 ' + currentUsername;
+}
+
+async function loadUsername() {
+  currentUsername = '';
+  try {
+    const { data: prof } = await db.from('profiles').select('username').eq('id', currentUser.id).single();
+    if (prof) currentUsername = prof.username;
+  } catch (e) { /* 忽略，回退用邮箱前缀 */ }
+  if (!currentUsername) currentUsername = (currentUser.email || '').split('@')[0];
+}
+
+async function enterApp() {
+  try {
+    data = await loadCloudData();
+  } catch (e) {
+    setAuthError('加载云端数据失败，请检查网络后重试');
+    return;
+  }
+  await loadUsername();
+  hideAuth();
+  updateUserBar();
+  if (!appInited) {
+    appInited = true;
+    init();
+  } else {
+    resetRecordForm();
+    renderHistory();
+  }
+}
+
+async function doLogin(username, password) {
+  const { data: prof, error } = await db
+    .from('profiles')
+    .select('email')
+    .eq('username', username)
+    .single();
+  if (error || !prof) return '用户名或密码错误';
+  const { error: authErr } = await db.auth.signInWithPassword({ email: prof.email, password });
+  if (authErr) return '用户名或密码错误';
+  return null;
+}
+
+async function doRegister(username, password) {
+  const { data: existing } = await db
+    .from('profiles')
+    .select('id')
+    .eq('username', username)
+    .maybeSingle();
+  if (existing) return '用户名已被占用，请换一个';
+  const email = 'u_' + genId() + '@users.trainlog.app';
+  const { data, error: authErr } = await db.auth.signUp({ email, password });
+  if (authErr) return authErr.message;
+  const user = data && data.user;
+  if (!user) return '注册失败，请重试';
+  const { error: insErr } = await db.from('profiles').insert({ id: user.id, username, email });
+  if (insErr) {
+    await db.auth.signOut();
+    if (insErr.code === '23505') return '用户名已被占用，请换一个';
+    return '注册失败：' + insErr.message;
+  }
+  return null;
+}
+
+async function handleAuthSubmit(e) {
+  e.preventDefault();
+  const username = $('auth-username').value.trim();
+  const password = $('auth-password').value;
+  if (!validUsername(username)) { setAuthError('用户名需 2–20 位，可含中文、字母、数字、下划线'); return; }
+  if (password.length < 6) { setAuthError('密码至少 6 位'); return; }
+  if (authMode === 'register' && password !== $('auth-confirm').value) {
+    setAuthError('两次输入的密码不一致');
+    return;
+  }
+  setAuthBusy(true);
+  setAuthError('');
+  const err = authMode === 'register'
+    ? await doRegister(username, password)
+    : await doLogin(username, password);
+  if (err) { setAuthBusy(false); setAuthError(err); return; }
+  const { data: sessionData } = await db.auth.getSession();
+  const session = sessionData && sessionData.session;
+  if (!session) { setAuthBusy(false); setAuthError('登录失败，请重试'); return; }
+  currentUser = session.user;
+  setAuthBusy(false);
+  await enterApp();
+}
+
+async function doLogout() {
+  await db.auth.signOut();
+  data = null;
+  currentUser = null;
+  currentUsername = '';
+  $('user-bar').hidden = true;
+  showAuth('login');
+}
+
+function bindAuth() {
+  document.querySelectorAll('.auth-tab').forEach(b => b.addEventListener('click', () => showAuth(b.dataset.mode)));
+  $('auth-form').addEventListener('submit', handleAuthSubmit);
+  $('btn-logout').addEventListener('click', doLogout);
+}
+
+async function boot() {
+  try {
+    if (!window.supabase) {
+      showAuth('login');
+      setAuthError('登录组件加载失败：无法访问 CDN，请检查网络后刷新。');
+      return;
+    }
+    initSupabase();
+    db.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        data = null; currentUser = null; currentUsername = '';
+        const ub = $('user-bar'); if (ub) ub.hidden = true;
+        showAuth('login');
+      }
+    });
+    if (!isSupabaseConfigured()) {
+      showAuth('login');
+      setAuthError('尚未配置 Supabase：请按 README-部署说明.md 填好 app.js 顶部的 SUPABASE_URL 与 SUPABASE_ANON_KEY 后刷新。');
+      return;
+    }
+    bindAuth();
+    const { data: sessionData } = await db.auth.getSession();
+    const session = sessionData && sessionData.session;
+    if (session) {
+      currentUser = session.user;
+      await enterApp();
+    } else {
+      showAuth('login');
+    }
+  } catch (e) {
+    showAuth('login');
+    setAuthError('初始化失败：' + (e && e.message ? e.message : e));
+  }
+}
+
 /* ===== ⑪ 初始化 ===== */
 function init() {
-  data = loadData();
 
   // 导航
   document.querySelectorAll('#tabbar .tab').forEach(b => {
@@ -1562,8 +1860,16 @@ function init() {
         row.querySelector('.set-weight').value = '';
         row.querySelector('.set-reps').value = '';
         row.querySelector('.set-rpe').value = '';
+        row.querySelector('.set-drops').innerHTML = '';
         updateSubtotal(card);
       }
+    } else if (e.target.closest('.drop-add')) {
+      const drop = addDropRow(e.target.closest('.set-row'));
+      drop.querySelector('.drop-weight').focus();
+      updateSubtotal(card);
+    } else if (e.target.closest('.drop-del')) {
+      e.target.closest('.set-drop').remove();
+      updateSubtotal(card);
     } else if (e.target.closest('.add-set')) {
       const row = addSetRow(card);
       row.querySelector('.set-weight').focus();
@@ -1575,7 +1881,7 @@ function init() {
   exList.addEventListener('input', e => {
     const card = e.target.closest('.ex-card');
     if (!card) return;
-    if (['set-weight', 'set-reps', 'set-rpe'].includes(e.target.className)) {
+    if (['set-weight', 'set-reps', 'set-rpe', 'drop-weight', 'drop-reps'].includes(e.target.className)) {
       updateSubtotal(card);
     }
   });
@@ -1595,6 +1901,26 @@ function init() {
         updateSubtotal(card);
       } else {
         row.nextElementSibling.querySelector('.set-weight').focus();
+      }
+    } else if (e.target.classList.contains('drop-weight')) {
+      e.preventDefault();
+      e.target.closest('.set-drop').querySelector('.drop-reps').focus();
+    } else if (e.target.classList.contains('drop-reps')) {
+      e.preventDefault();
+      const drop = e.target.closest('.set-drop');
+      const next = drop.nextElementSibling;
+      if (next && next.classList.contains('set-drop')) {
+        next.querySelector('.drop-weight').focus();
+      } else {
+        const row = drop.closest('.set-row');
+        const rows = card.querySelectorAll('.set-row');
+        if (row === rows[rows.length - 1]) {
+          const nr = addSetRow(card);
+          nr.querySelector('.set-weight').focus();
+          updateSubtotal(card);
+        } else {
+          row.nextElementSibling.querySelector('.set-weight').focus();
+        }
       }
     }
   });
@@ -1719,4 +2045,4 @@ function init() {
   renderHistory();
 }
 
-init();
+boot();

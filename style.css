@@ -186,7 +186,7 @@ main {
 }
 .icon-btn:hover { color: var(--text); background: var(--surface-3); }
 
-input[type="text"], input[type="search"], input[type="date"], select, .note-input {
+input[type="text"], input[type="password"], input[type="search"], input[type="date"], select, .note-input {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -258,9 +258,9 @@ input[type="date"] { color-scheme: dark; }
 
 .ex-groups { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 
-.set-head, .set-row {
+.set-head, .set-main, .set-drop {
   display: grid;
-  grid-template-columns: 28px 1fr 1fr 88px 32px;
+  grid-template-columns: 28px 1fr 1fr 84px 60px 28px;
   gap: 6px;
   align-items: center;
 }
@@ -271,13 +271,25 @@ input[type="date"] { color-scheme: dark; }
 .set-head span:nth-child(4) { text-align: center; }
 
 .set-row { margin-bottom: 6px; }
-.set-row input { text-align: center; font-variant-numeric: tabular-nums; }
-.set-row select { text-align: center; padding: 8px 2px; }
+.set-main input, .set-drop input { text-align: center; font-variant-numeric: tabular-nums; }
+.set-main select { text-align: center; padding: 8px 2px; }
 .set-num { color: var(--text-3); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.set-drops { margin-top: 2px; }
+.set-drop { margin-bottom: 4px; }
+.drop-arrow { color: var(--text-3); font-size: 13px; text-align: right; }
 
 input.invalid { border-color: var(--critical); background: rgba(208, 59, 59, .10); }
 
-.set-row .icon-btn { justify-self: end; }
+.set-main .icon-btn, .set-drop .icon-btn { justify-self: end; }
+.set-main .drop-add {
+  justify-self: center;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  padding: 3px 4px;
+}
+.set-main .drop-add:hover { color: var(--series-1); }
 
 .subtotal {
   font-size: 12.5px;
@@ -421,6 +433,7 @@ input.invalid { border-color: var(--critical); background: rgba(208, 59, 59, .10
 .data-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
 .data-table td:first-child { text-align: left; color: var(--text-2); }
 .data-table tr:last-child td { border-bottom: none; }
+.data-table tr.drop-row td, .data-table tr.drop-row td:first-child { color: var(--text-3); }
 
 .table-scroll { overflow-x: auto; }
 
@@ -722,3 +735,54 @@ details.details-card p { font-size: 13px; color: var(--text-2); }
 .sg-stat { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .pr-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; font-size: 13.5px; }
 .pr-ico { font-size: 15px; }
+
+/* ===== 16. 账号 / 登录 ===== */
+#user-bar {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+#user-name { white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+
+.auth-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow-y: auto;
+}
+.auth-box {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.auth-logo { font-size: 22px; font-weight: 700; text-align: center; }
+.auth-sub { text-align: center; color: var(--text-2); font-size: 13px; margin: 0; }
+.auth-tabs { display: flex; gap: 6px; }
+.auth-tab {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: 10px;
+  padding: 9px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.auth-tab.active { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
+.auth-field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text-2); }
+.auth-hint { text-align: center; color: var(--text-3); font-size: 12px; margin: 0; }
+.auth-box .form-error { margin: 0; }

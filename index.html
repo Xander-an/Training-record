@@ -4,16 +4,44 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>训练记录</title>
-  <link rel="stylesheet" href="style.css?v=20260929b">
+  <link rel="stylesheet" href="style.css?v=20261005">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
-  <div id="storage-banner" class="storage-banner" hidden>⚠️ 浏览器存储不可用：数据仅在本次打开期间保留，请立即导出备份！</div>
+  <!-- 登录 / 注册 -->
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-box">
+      <div class="auth-logo">🏋️ 训练记录</div>
+      <p class="auth-sub">登录后数据自动同步到云端，换设备也能查看</p>
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" data-mode="login">登录</button>
+        <button type="button" class="auth-tab" data-mode="register">注册</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <label class="auth-field">用户名
+          <input type="text" id="auth-username" autocomplete="username" maxlength="20" placeholder="2–20 位，可用中文/字母/数字">
+        </label>
+        <label class="auth-field">密码
+          <input type="password" id="auth-password" autocomplete="current-password" placeholder="至少 6 位">
+        </label>
+        <label class="auth-field" id="auth-confirm-wrap" hidden>确认密码
+          <input type="password" id="auth-confirm" autocomplete="new-password" placeholder="再输一遍密码">
+        </label>
+        <div id="auth-error" class="form-error" hidden></div>
+        <button type="submit" id="auth-submit" class="btn primary big">登录</button>
+      </form>
+      <p class="auth-hint">账号固定：注册后，用同一用户名可在任何设备登录并同步数据。</p>
+    </div>
+  </div>
 
   <header class="app-header">
     <div class="header-inner">
       <span class="app-title">🏋️ 训练记录</span>
-      <span class="ver" title="当前版本">v20260929b</span>
-      <span id="storage-warn" class="storage-warn" hidden>存储不可用</span>
+      <span class="ver" title="当前版本">v20261005</span>
+      <span id="user-bar" hidden>
+        <span id="user-name"></span>
+        <button type="button" id="btn-logout" class="btn sm ghost">退出</button>
+      </span>
     </div>
   </header>
 
@@ -78,7 +106,7 @@
     <section class="view" data-view="settings">
       <div class="card">
         <h3>数据备份</h3>
-        <p class="muted">数据保存在当前浏览器中。换浏览器、换设备或移动文件夹前，请先导出备份。备份文件为 JSON，可随时导入恢复。</p>
+        <p class="muted">数据已保存到云端，登录同一账号即可在多设备自动同步。导出/导入仍可作离线备份：备份文件为 JSON，可随时导入恢复。</p>
         <div class="btn-row">
           <button type="button" id="btn-export" class="btn">导出备份</button>
           <button type="button" id="btn-import" class="btn">导入备份</button>
@@ -93,13 +121,13 @@
       </div>
       <details class="card details-card">
         <summary>使用与口径说明</summary>
-        <p>· 「记录」页输入日期、动作、每组重量（kg）×次数与 RPE（自感强度，可不填）；支持复制上次训练、编辑历史训练。<br>
+        <p>· 「记录」页输入日期、动作、每组重量（kg）×次数与 RPE（自感强度，可不填）；力竭递减组可用「＋递减」在一组内追加减重分段，分段容量计入总容量；支持复制上次训练、编辑历史训练。<br>
         · 「分析 → 进步趋势」对比每个动作与上一次（非减载）训练的表现，指标为估算 1RM、总容量、最重一组；±1% 以内视为持平。<br>
         · 「分析 → 增肌分析」统计最近 7 天各肌群有效组数，与常见研究建议的每周 10–20 组对比；有效组指重量 ≥ 该动作历史最大重量 30% 的组（热身不计），自重动作全部计入；并附近 8 周的周容量趋势图。<br>
         · 「分析 → 下次训练」基于双进阶法给出每个动作下次的建议重量/次数。<br>
         · 「分析 → 周总结」汇总本周训练天数、有效组数、总容量、各肌群频率与本周破纪录。<br>
         · 所有分析由原始记录实时计算，删除或修改历史后自动更新。<br>
-        · 数据仅保存在本机浏览器中，请定期导出备份。</p>
+        · 数据保存在云端，登录账号后多设备自动同步；仍建议定期导出备份。</p>
       </details>
     </section>
 
@@ -126,6 +154,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=20260929b"></script>
+  <script src="app.js?v=20261007"></script>
 </body>
 </html>
