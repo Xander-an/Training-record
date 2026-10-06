@@ -2,9 +2,10 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101715">
   <title>训练记录</title>
-  <link rel="stylesheet" href="style.css?v=20261010">
+  <link rel="stylesheet" href="style.css?v=20261006-mobile">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
@@ -36,8 +37,8 @@
 
   <header class="app-header">
     <div class="header-inner">
-      <span class="app-title">🏋️ 训练记录</span>
-      <span class="ver" title="当前版本">v20261010</span>
+      <span class="app-title"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 7v10M3 9v6M18 7v10M21 9v6M6 12h12"/></svg></span>训练记录</span>
+      <span class="ver" title="当前版本">20261006</span>
       <span id="user-bar" hidden>
         <span id="user-name"></span>
         <button type="button" id="btn-logout" class="btn sm ghost">退出</button>
@@ -45,27 +46,34 @@
     </div>
   </header>
 
-  <nav class="tabbar" id="tabbar">
-    <button type="button" class="tab active" data-tab="record"><span class="tab-ico">📝</span><span>记录</span></button>
-    <button type="button" class="tab" data-tab="history"><span class="tab-ico">📋</span><span>历史</span></button>
-    <button type="button" class="tab" data-tab="analysis"><span class="tab-ico">📈</span><span>分析</span></button>
-    <button type="button" class="tab" data-tab="library"><span class="tab-ico">📚</span><span>动作库</span></button>
-    <button type="button" class="tab" data-tab="settings"><span class="tab-ico">⚙️</span><span>设置</span></button>
+  <nav class="tabbar" id="tabbar" aria-label="主导航">
+    <button type="button" class="tab active" data-tab="record" aria-current="page"><span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 6H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-7M16 3l5 5M9 15l1-5 8-8 5 5-8 8-6 1Z"/></svg></span><span>记录</span></button>
+    <button type="button" class="tab" data-tab="history"><span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 3h8v4H8zM8 5H5v16h14V5h-3M8 12h8M8 16h5"/></svg></span><span>历史</span></button>
+    <button type="button" class="tab" data-tab="analysis"><span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 3v17h17M7 15l5-5 4 3 5-7"/></svg></span><span>分析</span></button>
+    <button type="button" class="tab" data-tab="library"><span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 6v15M12 6C9 3 5 3 2 4v15c4-1 7 0 10 2 3-2 6-3 10-2V4c-3-1-7-1-10 2Z"/></svg></span><span>动作库</span></button>
+    <button type="button" class="tab" data-tab="settings"><span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></span><span>设置</span></button>
   </nav>
 
   <main id="main">
 
     <!-- 记录 -->
     <section class="view active" data-view="record" id="record-view">
-      <p class="muted small record-help">逐个添加本次训练的动作，保存进度后继续记录，全部练完再点击「完成本次训练」。</p>
+      <div class="page-heading"><p class="eyebrow">YOUR TRAINING JOURNAL</p><h1>记录每一次进步<span class="heading-dot">.</span></h1><p class="muted">专注训练，剩下的交给记录。</p></div>
+      <div class="training-summary" aria-label="本次训练概况">
+        <div><b id="rec-ex-count">0</b><span>个动作</span></div>
+        <div><b id="rec-set-count">0</b><span>组已填写</span></div>
+        <div><b id="rec-volume">0</b><span>kg 总容量</span></div>
+      </div>
       <div id="rec-edit-banner" class="edit-banner" hidden>正在编辑 <b></b> 的训练</div>
-      <div class="card">
+      <div class="card session-card">
         <div class="form-grid">
-          <label class="field">日期
+          <label class="field">训练日期
             <input type="date" id="rec-date">
           </label>
           <label class="check field"><input type="checkbox" id="rec-deload"> 减载/恢复周</label>
         </div>
+        <details id="rec-details" class="session-details">
+        <summary>时间与备注 <span>选填</span></summary>
         <div class="form-grid training-times">
           <label class="field">训练开始时间（可选）
             <input type="time" id="rec-start-time" step="60">
@@ -76,9 +84,10 @@
           <label class="check field"><input type="checkbox" id="rec-end-next-day"> 次日结束</label>
         </div>
         <p id="rec-duration" class="muted small" aria-live="polite">时间可选填，支持次日结束。</p>
-        <input type="text" id="rec-note" class="note-input" placeholder="备注（可选）" maxlength="200">
+        <input type="text" id="rec-note" class="note-input" placeholder="今天状态怎么样？记一句…" maxlength="200" aria-label="训练备注">
+        </details>
         <div class="btn-row">
-          <button type="button" id="btn-copy-last" class="btn ghost">复制上次训练</button>
+          <button type="button" id="btn-copy-last" class="btn ghost">↻ 复制上次训练</button>
           <button type="button" id="btn-cancel-edit" class="btn ghost" hidden>取消编辑</button>
         </div>
       </div>
@@ -86,7 +95,7 @@
       <button type="button" id="btn-add-ex" class="btn add-ex">＋ 添加动作</button>
       <div id="rec-error" class="form-error" hidden></div>
       <div class="save-bar">
-        <p id="rec-draft-status" class="muted small" role="status">草稿自动保存到此设备；逐个添加动作，最后完成本次训练。</p>
+        <p id="rec-draft-status" class="muted small" role="status">草稿自动保存到此设备；全部练完后完成训练。</p>
         <div class="session-actions">
           <button type="button" id="btn-save" class="btn big">保存进度</button>
           <button type="button" id="btn-finish" class="btn primary big">完成本次训练</button>
@@ -96,7 +105,8 @@
 
     <!-- 历史 -->
     <section class="view" data-view="history">
-      <input type="search" id="hist-search" class="search-input" placeholder="搜索动作名…">
+      <div class="page-heading"><p class="eyebrow">TRAINING HISTORY</p><h1>训练足迹<span class="heading-dot">.</span></h1><p class="muted">每一次坚持，都有迹可循。</p></div>
+      <input type="search" id="hist-search" class="search-input" placeholder="搜索动作名…" aria-label="搜索历史训练" enterkeyhint="search">
       <p class="muted small">已分开保存的动作，可勾选同一天的记录合并为一次训练。</p>
       <div class="btn-row merge-toolbar">
         <button type="button" id="btn-merge-workouts" class="btn" disabled>合并已选训练（0）</button>
@@ -107,6 +117,7 @@
 
     <!-- 分析 -->
     <section class="view" data-view="analysis">
+      <div class="page-heading"><p class="eyebrow">YOUR PROGRESS</p><h1>看见你的进步<span class="heading-dot">.</span></h1></div>
       <div class="sub-tabs">
         <button type="button" class="sub-tab active" data-sub="progress">进步趋势</button>
         <button type="button" class="sub-tab" data-sub="hypertrophy">增肌分析</button>
@@ -118,12 +129,14 @@
 
     <!-- 动作库 -->
     <section class="view" data-view="library">
+      <div class="page-heading"><p class="eyebrow">EXERCISE LIBRARY</p><h1>你的动作库<span class="heading-dot">.</span></h1><p class="muted">找到适合你的动作，练得更顺手。</p></div>
       <button type="button" id="btn-new-ex" class="btn add-ex">＋ 新建动作</button>
       <div id="library-body"></div>
     </section>
 
     <!-- 设置 -->
     <section class="view" data-view="settings">
+      <div class="page-heading"><p class="eyebrow">PREFERENCES</p><h1>设置与数据<span class="heading-dot">.</span></h1></div>
       <div class="card">
         <h3>数据备份</h3>
         <p class="muted">数据已保存到云端，登录同一账号即可在多设备自动同步。导出/导入仍可作离线备份：备份文件为 JSON，可随时导入恢复。</p>
@@ -154,13 +167,14 @@
   </main>
 
   <!-- 动作选择器弹窗 -->
-  <div id="picker-modal" class="modal" hidden>
+  <div id="picker-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="picker-title" hidden>
     <div class="modal-box">
       <div class="modal-head">
-        <h3>选择动作</h3>
+        <h3 id="picker-title">选择动作</h3>
         <button type="button" class="icon-btn" id="picker-close" aria-label="关闭">✕</button>
       </div>
-      <input type="search" id="picker-search" class="search-input" placeholder="搜索动作…">
+      <input type="search" id="picker-search" class="search-input" placeholder="搜索动作…" aria-label="搜索动作" enterkeyhint="search">
+      <div class="picker-results">
       <div id="picker-recent"></div>
       <div id="picker-list"></div>
       <button type="button" id="btn-toggle-new" class="btn ghost full">＋ 新建自定义动作</button>
@@ -169,11 +183,12 @@
         <div id="new-ex-groups"></div>
         <button type="button" id="new-ex-confirm" class="btn primary full">创建动作</button>
       </div>
+      </div>
     </div>
   </div>
 
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
 
-  <script src="app.js?v=20261010"></script>
+  <script src="app.js?v=20261006-mobile"></script>
 </body>
 </html>

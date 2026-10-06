@@ -363,7 +363,11 @@ function toast(msg, type) {
 }
 
 function switchTab(name) {
-  document.querySelectorAll('#tabbar .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('#tabbar .tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === name);
+    if (b.dataset.tab === name) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
   if (name === 'history') renderHistory();
   else if (name === 'analysis') renderAnalysis();
@@ -473,6 +477,7 @@ function restoreRecordDraft() {
   $('rec-end-next-day').checked = draft.endNextDay;
   $('rec-deload').checked = draft.isDeload;
   $('rec-note').value = draft.note;
+  $('rec-details').open = !!(draft.startTime || draft.endTime || draft.note || draft.endNextDay);
   $('btn-cancel-edit').hidden = !state.editingId;
   $('rec-edit-banner').hidden = !state.editingId;
   updateRecordActions();
@@ -487,15 +492,39 @@ function restoreRecordDraft() {
 
 function clearExercises() { $('ex-list').innerHTML = ''; }
 
+function updateTrainingSummary() {
+  const cards = [...$('ex-list').querySelectorAll('.ex-card')];
+  let sets = 0, volume = 0;
+  for (const card of cards) {
+    for (const row of card.querySelectorAll('.set-row')) {
+      const weight = Number(row.querySelector('.set-weight').value.trim());
+      const reps = Number(row.querySelector('.set-reps').value.trim());
+      if (!row.querySelector('.set-weight').value.trim() || !Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps < 1) continue;
+      sets++;
+      volume += weight * reps;
+      for (const drop of row.querySelectorAll('.set-drop')) {
+        const dw = Number(drop.querySelector('.drop-weight').value.trim());
+        const dr = Number(drop.querySelector('.drop-reps').value.trim());
+        if (drop.querySelector('.drop-weight').value.trim() && Number.isFinite(dw) && dw >= 0 && Number.isInteger(dr) && dr > 0) volume += dw * dr;
+      }
+    }
+  }
+  $('rec-ex-count').textContent = cards.length;
+  $('rec-set-count').textContent = sets;
+  $('rec-volume').textContent = fmtNum(volume);
+}
+
 function updateRecordEmptyState() {
+  updateTrainingSummary();
   const list = $('ex-list');
   const has = list.querySelector('.ex-card');
+  $('record-view').classList.toggle('record-empty', !has);
   let ph = list.querySelector('.ex-empty');
   if (has) { if (ph) ph.remove(); return; }
   if (!ph) {
     ph = document.createElement('div');
     ph.className = 'empty ex-empty';
-    ph.textContent = '还没有动作 — 点击下方「＋ 添加动作」开始';
+    ph.innerHTML = '<span class="empty-mark" aria-hidden="true">＋</span><b>准备好开始了吗？</b><p>添加第一个动作，或复制上次训练。</p>';
     list.appendChild(ph);
   }
 }
@@ -509,6 +538,7 @@ function resetRecordForm(discardDraft = true) {
   resetTrainingTimes();
   $('rec-deload').checked = false;
   $('rec-note').value = '';
+  $('rec-details').open = false;
   $('btn-cancel-edit').hidden = true;
   $('rec-edit-banner').hidden = true;
   $('rec-error').hidden = true;
@@ -529,6 +559,7 @@ function fillWorkout(w) {
   updateTrainingDuration();
   $('rec-deload').checked = !!w.isDeload;
   $('rec-note').value = w.note || '';
+  $('rec-details').open = !!(w.startTime || w.endTime || w.note || w.endNextDay);
   $('btn-cancel-edit').hidden = false;
   updateRecordActions();
   clearExercises();
@@ -553,12 +584,15 @@ function rpeOptionsHtml(sel) {
 function addExerciseCard(name, groups, sets) {
   const card = document.createElement('div');
   card.className = 'ex-card';
+  card.tabIndex = -1;
   card.innerHTML = `
     <div class="ex-head">
-      <input class="ex-name" type="text" value="${escapeHtml(name)}" placeholder="动作名称" maxlength="30">
-      <button type="button" class="icon-btn ex-del" title="移除动作">✕</button>
+      <input class="ex-name" type="text" value="${escapeHtml(name)}" placeholder="动作名称" maxlength="30" aria-label="动作名称">
+      <button type="button" class="icon-btn ex-del" title="移除动作" aria-label="移除动作">✕</button>
     </div>
-    <div class="ex-groups">${groupChipsHtml(groups)}</div>
+    <details class="exercise-muscles"><summary><span class="ex-muscle-label">${(groups || []).map(escapeHtml).join(' · ') || '未选择肌群'}</span><span>调整肌群</span></summary>
+      <div class="ex-groups">${groupChipsHtml(groups)}</div>
+    </details>
     <div class="set-head"><span></span><span>重量 kg</span><span>次数</span><span>RPE</span><span></span><span></span></div>
     <div class="set-rows"></div>
     <button type="button" class="btn sm ghost add-set">＋ 添加一组</button>
@@ -582,11 +616,11 @@ function addSetRow(card, preset) {
   row.innerHTML = `
     <div class="set-main">
       <span class="set-num"></span>
-      <input class="set-weight" type="text" inputmode="decimal" placeholder="重量">
-      <input class="set-reps" type="text" inputmode="numeric" placeholder="次数">
-      <select class="set-rpe">${rpeOptionsHtml('')}</select>
+      <label class="set-field set-weight-field"><span>重量 / kg</span><input class="set-weight" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="重量" aria-label="重量（kg）"></label>
+      <label class="set-field set-reps-field"><span>次数</span><input class="set-reps" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" placeholder="次数" aria-label="次数"></label>
+      <label class="set-field set-rpe-field"><span>RPE</span><select class="set-rpe" aria-label="自感强度 RPE（选填）">${rpeOptionsHtml('')}</select></label>
       <button type="button" class="icon-btn drop-add" title="添加递减组（力竭后减重继续做）">＋递减</button>
-      <button type="button" class="icon-btn set-del" title="删除此组">✕</button>
+      <button type="button" class="icon-btn set-del" title="删除此组" aria-label="删除此组">✕</button>
     </div>
     <div class="set-drops"></div>`;
   const wi = row.querySelector('.set-weight');
@@ -614,10 +648,10 @@ function addDropRow(setRow, preset) {
   drop.className = 'set-drop';
   drop.innerHTML = `
     <span class="drop-arrow">↳</span>
-    <input class="drop-weight" type="text" inputmode="decimal" placeholder="重量">
-    <input class="drop-reps" type="text" inputmode="numeric" placeholder="次数">
-    <span></span><span></span>
-    <button type="button" class="icon-btn drop-del" title="删除此递减段">✕</button>`;
+    <input class="drop-weight" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="重量" aria-label="递减段重量（kg）">
+    <input class="drop-reps" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" placeholder="次数" aria-label="递减段次数">
+    <span class="drop-spacer"></span><span class="drop-spacer"></span>
+    <button type="button" class="icon-btn drop-del" title="删除此递减段" aria-label="删除此递减段">✕</button>`;
   const wi = drop.querySelector('.drop-weight');
   const ri = drop.querySelector('.drop-reps');
   if (preset) {
@@ -664,6 +698,7 @@ function updateSubtotal(card) {
   el.textContent = count
     ? `共 ${count} 组${dropCount ? ' · 含 ' + dropCount + ' 段递减' : ''} · 总容量 ${fmtNum(volume)} kg · 最佳估算1RM ≈ ${fmtNum(best)} kg`
     : '';
+  updateTrainingSummary();
 }
 
 function collectRecord() {
@@ -841,17 +876,39 @@ function copyLastWorkout() {
 }
 
 /* —— 动作选择器弹窗 —— */
+let pickerReturnFocus = null;
+let pickerScrollY = 0;
 function openPicker() {
   const modal = $('picker-modal');
+  if (!modal.hidden) return;
+  pickerReturnFocus = document.activeElement;
+  pickerScrollY = window.scrollY;
+  document.body.style.top = `-${pickerScrollY}px`;
+  document.body.classList.add('modal-open');
+  document.querySelectorAll('.app-header, #tabbar, #main').forEach(el => { el.inert = true; });
   modal.hidden = false;
   $('picker-search').value = '';
   $('picker-new').hidden = true;
   $('btn-toggle-new').textContent = '＋ 新建自定义动作';
   renderPicker();
-  setTimeout(() => $('picker-search').focus(), 0);
+  modal.querySelector('.picker-results').scrollTop = 0;
+  // 手机上先展示动作列表，用户点击搜索时再唤起键盘。
+  (window.matchMedia('(max-width: 767px)').matches ? $('picker-close') : $('picker-search')).focus({ preventScroll: true });
 }
 
-function closePicker() { $('picker-modal').hidden = true; }
+function closePicker(focusTarget) {
+  if ($('picker-modal').hidden) return;
+  $('picker-modal').hidden = true;
+  document.body.classList.remove('modal-open');
+  document.body.style.top = '';
+  document.querySelectorAll('.app-header, #tabbar, #main').forEach(el => { el.inert = false; });
+  window.scrollTo(0, pickerScrollY);
+  const target = focusTarget || pickerReturnFocus;
+  if (target && target.isConnected) {
+    target.focus({ preventScroll: true });
+    if (focusTarget) target.scrollIntoView({ block: 'nearest' });
+  }
+}
 
 function renderPicker() {
   const q = $('picker-search').value.trim().toLowerCase();
@@ -891,8 +948,7 @@ function createCustomExercise(fromPicker) {
   save();
   if (fromPicker) {
     const card = addExerciseCard(name, groups, null);
-    card.querySelector('.ex-name').focus();
-    closePicker();
+    closePicker(card);
   } else {
     renderLibrary();
   }
@@ -2102,7 +2158,32 @@ async function boot() {
 }
 
 /* ===== ⑪ 初始化 ===== */
+function bindMobileViewport() {
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  let restingHeight = viewport.height;
+  let lastWidth = window.innerWidth;
+  function updateViewport() {
+    const active = document.activeElement;
+    const editing = active && active.matches('input:not([type="checkbox"]):not([type="file"]), textarea');
+    if (lastWidth !== window.innerWidth) {
+      lastWidth = window.innerWidth;
+      restingHeight = viewport.height;
+    } else if (!editing) restingHeight = Math.max(restingHeight, viewport.height);
+    const keyboardOpen = window.matchMedia('(max-width: 767px)').matches && editing && restingHeight - viewport.height > 120;
+    document.body.classList.toggle('keyboard-open', !!keyboardOpen);
+    document.documentElement.style.setProperty('--visual-height', `${viewport.height}px`);
+    document.documentElement.style.setProperty('--visual-top', `${viewport.offsetTop}px`);
+  }
+  viewport.addEventListener('resize', updateViewport);
+  viewport.addEventListener('scroll', updateViewport);
+  document.addEventListener('focusin', updateViewport);
+  document.addEventListener('focusout', () => requestAnimationFrame(updateViewport));
+  updateViewport();
+}
+
 function init() {
+  bindMobileViewport();
 
   // 导航
   document.querySelectorAll('#tabbar .tab').forEach(b => {
@@ -2176,6 +2257,7 @@ function init() {
       updateSubtotal(card);
     } else if (e.target.classList.contains('chip')) {
       e.target.classList.toggle('on');
+      card.querySelector('.ex-muscle-label').textContent = [...card.querySelectorAll('.ex-groups .chip.on')].map(chip => chip.dataset.group).join(' · ') || '未选择肌群';
     }
   });
   exList.addEventListener('input', e => {
@@ -2238,8 +2320,7 @@ function init() {
       }
       const entry = allExercises().find(e => e.name === name);
       const card = addExerciseCard(name, entry ? entry.groups : ['其他'], null);
-      card.querySelector('.ex-name').focus();
-      closePicker();
+      closePicker(card);
       return;
     }
     const t = e.target.closest('#btn-toggle-new');
@@ -2259,6 +2340,13 @@ function init() {
   $('picker-search').addEventListener('input', renderPicker);
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !pickerModal.hidden) closePicker();
+    if (e.key === 'Tab' && !pickerModal.hidden) {
+      const items = [...pickerModal.querySelectorAll('button, input, select, [tabindex="0"]')]
+        .filter(el => !el.disabled && el.getClientRects().length);
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
   });
 
   // 历史
