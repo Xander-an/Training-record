@@ -246,6 +246,9 @@ input[type="date"] { color-scheme: dark; }
 }
 
 .form-grid { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.training-times { margin-top: 12px; }
+.training-times .field:not(.check) { flex: 1; }
+.hist-time { color: var(--text-2); font-size: 13px; margin-bottom: 8px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-2); min-width: 150px; }
 .field.check { flex-direction: row; align-items: center; gap: 8px; padding-bottom: 8px; cursor: pointer; }
 .field.check input { width: 16px; height: 16px; accent-color: var(--series-1); }
@@ -311,6 +314,14 @@ input.invalid { border-color: var(--critical); background: rgba(208, 59, 59, .10
 }
 
 .save-bar { position: sticky; bottom: 72px; z-index: 5; background: var(--bg); padding-top: 8px; }
+.session-actions { display: flex; gap: 8px; }
+.session-actions .btn { flex: 1; min-width: 0; font-size: 14px; padding: 12px 8px; }
+.record-help { margin-bottom: 10px; }
+.merge-toolbar { margin-bottom: 12px; }
+.hist-select { display: flex; align-items: center; gap: 6px; padding: 8px 12px 0; font-size: 12px; color: var(--text-2); }
+.hist-select input { width: 16px; height: 16px; accent-color: var(--series-1); }
+.merge-sources { margin-top: 12px; font-size: 13px; color: var(--text-2); }
+.btn:disabled { opacity: .5; cursor: default; }
 
 /* ===== 5. 弹窗 / toast ===== */
 .modal {

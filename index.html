@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>训练记录</title>
-  <link rel="stylesheet" href="style.css?v=20261005">
+  <link rel="stylesheet" href="style.css?v=20261010">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
@@ -37,7 +37,7 @@
   <header class="app-header">
     <div class="header-inner">
       <span class="app-title">🏋️ 训练记录</span>
-      <span class="ver" title="当前版本">v20261005</span>
+      <span class="ver" title="当前版本">v20261010</span>
       <span id="user-bar" hidden>
         <span id="user-name"></span>
         <button type="button" id="btn-logout" class="btn sm ghost">退出</button>
@@ -57,6 +57,7 @@
 
     <!-- 记录 -->
     <section class="view active" data-view="record" id="record-view">
+      <p class="muted small record-help">逐个添加本次训练的动作，保存进度后继续记录，全部练完再点击「完成本次训练」。</p>
       <div id="rec-edit-banner" class="edit-banner" hidden>正在编辑 <b></b> 的训练</div>
       <div class="card">
         <div class="form-grid">
@@ -65,6 +66,16 @@
           </label>
           <label class="check field"><input type="checkbox" id="rec-deload"> 减载/恢复周</label>
         </div>
+        <div class="form-grid training-times">
+          <label class="field">训练开始时间（可选）
+            <input type="time" id="rec-start-time" step="60">
+          </label>
+          <label class="field">训练结束时间（可选）
+            <input type="time" id="rec-end-time" step="60">
+          </label>
+          <label class="check field"><input type="checkbox" id="rec-end-next-day"> 次日结束</label>
+        </div>
+        <p id="rec-duration" class="muted small" aria-live="polite">时间可选填，支持次日结束。</p>
         <input type="text" id="rec-note" class="note-input" placeholder="备注（可选）" maxlength="200">
         <div class="btn-row">
           <button type="button" id="btn-copy-last" class="btn ghost">复制上次训练</button>
@@ -75,13 +86,22 @@
       <button type="button" id="btn-add-ex" class="btn add-ex">＋ 添加动作</button>
       <div id="rec-error" class="form-error" hidden></div>
       <div class="save-bar">
-        <button type="button" id="btn-save" class="btn primary big">保存训练</button>
+        <p id="rec-draft-status" class="muted small" role="status">草稿自动保存到此设备；逐个添加动作，最后完成本次训练。</p>
+        <div class="session-actions">
+          <button type="button" id="btn-save" class="btn big">保存进度</button>
+          <button type="button" id="btn-finish" class="btn primary big">完成本次训练</button>
+        </div>
       </div>
     </section>
 
     <!-- 历史 -->
     <section class="view" data-view="history">
       <input type="search" id="hist-search" class="search-input" placeholder="搜索动作名…">
+      <p class="muted small">已分开保存的动作，可勾选同一天的记录合并为一次训练。</p>
+      <div class="btn-row merge-toolbar">
+        <button type="button" id="btn-merge-workouts" class="btn" disabled>合并已选训练（0）</button>
+        <button type="button" id="btn-clear-selection" class="btn ghost" hidden>取消选择</button>
+      </div>
       <div id="history-list"></div>
     </section>
 
@@ -154,6 +174,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=20261007"></script>
+  <script src="app.js?v=20261010"></script>
 </body>
 </html>

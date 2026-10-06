@@ -153,9 +153,16 @@ function cleanWorkout(w) {
   return {
     id: typeof w.id === 'string' ? w.id : uid('w'),
     date,
+    inProgress: w.inProgress === true,
+    startTime: cleanTime(w.startTime),
+    endTime: cleanTime(w.endTime),
+    endNextDay: w.endNextDay === true,
     isDeload: w.isDeload === true,
     note: typeof w.note === 'string' ? w.note.slice(0, 500) : '',
     exercises,
+    ...(Array.isArray(w.sourceWorkouts) ? { sourceWorkouts: w.sourceWorkouts
+      .filter(source => source && typeof source === 'object')
+      .map(source => cleanWorkout({ ...source, sourceWorkouts: undefined })).filter(Boolean) } : {}),
   };
 }
 
@@ -184,14 +191,17 @@ function sanitizeData(obj) {
   return out;
 }
 
-function save() {
-  if (!db || !currentUser) return;
-  db
-    .from('user_data')
-    .upsert({ user_id: currentUser.id, data, updated_at: new Date().toISOString() })
-    .then(({ error }) => {
-      if (error) toast('保存到云端失败，请检查网络后重试', 'warn');
-    });
+async function save(snapshot = data) {
+  if (!db || !currentUser) return false;
+  try {
+    const { error } = await db.from('user_data')
+      .upsert({ user_id: currentUser.id, data: snapshot, updated_at: new Date().toISOString() });
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    toast('保存到云端失败，请检查网络后重试', 'warn');
+    return false;
+  }
 }
 
 async function loadCloudData() {
@@ -214,6 +224,34 @@ function dateStr(d) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function todayStr() { return dateStr(new Date()); }
+function cleanTime(value) {
+  return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : '';
+}
+function trainingMinutes(start, end, nextDay) {
+  if (!cleanTime(start) || !cleanTime(end)) return null;
+  const minutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+  return minutes(end) - minutes(start) + (nextDay ? 1440 : 0);
+}
+function trainingTimeLabel(w) {
+  const start = cleanTime(w.startTime), end = cleanTime(w.endTime);
+  if (!start && !end) return '';
+  const duration = trainingMinutes(start, end, w.endNextDay);
+  return `${start ? '开始 ' + start : '开始未填写'} · ${end ? '结束 ' + (w.endNextDay ? '次日 ' : '') + end : '结束未填写'}${duration !== null && duration > 0 ? ' · 时长 ' + duration + ' 分钟' : ''}`;
+}
+function updateTrainingDuration() {
+  const startTime = $('rec-start-time').value, endTime = $('rec-end-time').value;
+  const endNextDay = $('rec-end-next-day').checked;
+  const duration = trainingMinutes(startTime, endTime, endNextDay);
+  $('rec-duration').textContent = duration !== null && duration <= 0
+    ? '结束时间须晚于开始时间；跨午夜训练请勾选「次日结束」。'
+    : trainingTimeLabel({ startTime, endTime, endNextDay }) || '时间可选填，支持次日结束。';
+}
+function resetTrainingTimes() {
+  $('rec-start-time').value = '';
+  $('rec-end-time').value = '';
+  $('rec-end-next-day').checked = false;
+  updateTrainingDuration();
+}
 function addDays(s, n) {
   const [y, m, d] = s.split('-').map(Number);
   return dateStr(new Date(y, m - 1, d + n));
@@ -309,6 +347,9 @@ const state = {
   historySearch: '',
   pendingImport: null,
   searchTimer: null,
+  draftWorkoutId: null,
+  recordMode: 'session',
+  mergeIds: [],
 };
 
 let toastTimer = null;
@@ -332,6 +373,118 @@ function switchTab(name) {
 }
 
 /* ===== ⑤ 记录视图 ===== */
+// 草稿单独按账号存放，保留原始输入（包括只填了一半的组），不经过正式记录校验。
+let draftOwner = null;
+let savingWorkout = false;
+function draftKey(userId) { return 'training-log:record-draft:v1:' + userId; }
+function draftStatus(message) { $('rec-draft-status').textContent = message; }
+function updateRecordActions() {
+  const editing = state.recordMode === 'edit';
+  $('btn-save').textContent = editing ? '保存修改' : '保存进度';
+  $('btn-finish').hidden = editing;
+  $('btn-cancel-edit').hidden = !state.editingId;
+  $('btn-cancel-edit').textContent = editing ? '取消编辑' : '稍后继续';
+  $('rec-edit-banner').hidden = !state.editingId;
+  $('rec-edit-banner').innerHTML = state.editingId
+    ? `${editing ? '正在编辑' : '本次训练进行中：'} <b>${escapeHtml(shortDate($('rec-date').value))}</b>${editing ? ' 的训练' : ' · 添加的动作会归入同一次训练'}` : '';
+}
+function captureRecordDraft() {
+  return {
+    version: 1,
+    editingId: state.editingId,
+    workoutId: state.draftWorkoutId,
+    recordMode: state.recordMode,
+    date: $('rec-date').value,
+    startTime: $('rec-start-time').value,
+    endTime: $('rec-end-time').value,
+    endNextDay: $('rec-end-next-day').checked,
+    isDeload: $('rec-deload').checked,
+    note: $('rec-note').value,
+    exercises: [...$('ex-list').querySelectorAll('.ex-card')].map(card => ({
+      name: card.querySelector('.ex-name').value,
+      muscleGroups: [...card.querySelectorAll('.ex-groups .chip.on')].map(c => c.dataset.group),
+      sets: [...card.querySelectorAll('.set-row')].map(row => ({
+        weight: row.querySelector('.set-weight').value,
+        reps: row.querySelector('.set-reps').value,
+        rpe: row.querySelector('.set-rpe').value,
+        drops: [...row.querySelectorAll('.set-drop')].map(drop => ({
+          weight: drop.querySelector('.drop-weight').value,
+          reps: drop.querySelector('.drop-reps').value,
+        })),
+      })),
+    })),
+  };
+}
+function persistRecordDraft() {
+  if (!currentUser || draftOwner !== currentUser.id) return;
+  try {
+    const draft = captureRecordDraft();
+    const hasContent = draft.editingId || draft.exercises.length || draft.note || draft.startTime
+      || draft.endTime || draft.endNextDay || draft.isDeload || draft.date !== todayStr();
+    if (!hasContent) {
+      localStorage.removeItem(draftKey(draftOwner));
+      draftStatus('草稿自动保存到此设备；逐个添加动作，最后完成本次训练。');
+      return;
+    }
+    if (!state.draftWorkoutId) state.draftWorkoutId = state.editingId || uid('w');
+    draft.workoutId = state.draftWorkoutId;
+    localStorage.setItem(draftKey(draftOwner), JSON.stringify(draft));
+    draftStatus('草稿已自动保存到此设备；保存进度可同步云端，所有动作归入本次训练。');
+  } catch (e) {
+    draftStatus('此浏览器无法保存草稿，请保持页面打开并及时保存训练。');
+  }
+}
+function discardRecordDraft() {
+  state.draftWorkoutId = null;
+  if (!currentUser || draftOwner !== currentUser.id) return;
+  try { localStorage.removeItem(draftKey(draftOwner)); }
+  catch (e) { draftStatus('无法清除本机草稿，请检查浏览器存储权限。'); }
+}
+function validRecordDraft(d) {
+  const text = v => typeof v === 'string';
+  return d && d.version === 1 && (d.editingId === null || text(d.editingId))
+    && text(d.workoutId) && text(d.date) && text(d.startTime) && text(d.endTime)
+    && text(d.note) && typeof d.endNextDay === 'boolean' && typeof d.isDeload === 'boolean'
+    && Array.isArray(d.exercises) && d.exercises.every(ex => ex && text(ex.name)
+      && Array.isArray(ex.muscleGroups) && ex.muscleGroups.every(g => MUSCLE_GROUPS.includes(g))
+      && Array.isArray(ex.sets) && ex.sets.length > 0 && ex.sets.every(s => s
+        && text(s.weight) && text(s.reps) && text(s.rpe) && Array.isArray(s.drops)
+        && s.drops.every(drop => drop && text(drop.weight) && text(drop.reps))));
+}
+function restoreRecordDraft() {
+  let draft;
+  try {
+    const raw = localStorage.getItem(draftKey(currentUser.id));
+    if (!raw) return;
+    draft = JSON.parse(raw);
+    if (!validRecordDraft(draft)) throw new Error('Invalid draft');
+  } catch (e) {
+    draftStatus('无法读取本机草稿，请检查浏览器存储；原有云端记录不受影响。');
+    return;
+  }
+  // 使用固定记录 ID，避免云端已写入但页面在收到响应前重载时重复添加。
+  state.draftWorkoutId = draft.workoutId;
+  const existingId = draft.editingId || draft.workoutId;
+  state.editingId = data.workouts.some(w => w.id === existingId) ? existingId : null;
+  state.recordMode = draft.recordMode === 'edit' ? 'edit' : 'session';
+  $('rec-date').value = draft.date;
+  $('rec-start-time').value = draft.startTime;
+  $('rec-end-time').value = draft.endTime;
+  $('rec-end-next-day').checked = draft.endNextDay;
+  $('rec-deload').checked = draft.isDeload;
+  $('rec-note').value = draft.note;
+  $('btn-cancel-edit').hidden = !state.editingId;
+  $('rec-edit-banner').hidden = !state.editingId;
+  updateRecordActions();
+  clearExercises();
+  for (const ex of draft.exercises) addExerciseCard(ex.name, ex.muscleGroups, ex.sets);
+  updateRecordEmptyState();
+  updateTrainingDuration();
+  draftStatus('已恢复未完成的训练草稿，可以继续记录。');
+  switchTab('record');
+  toast('已恢复未完成的训练草稿');
+}
+
 function clearExercises() { $('ex-list').innerHTML = ''; }
 
 function updateRecordEmptyState() {
@@ -347,9 +500,13 @@ function updateRecordEmptyState() {
   }
 }
 
-function resetRecordForm() {
+function resetRecordForm(discardDraft = true) {
+  if (discardDraft) discardRecordDraft();
+  state.draftWorkoutId = null;
   state.editingId = null;
+  state.recordMode = 'session';
   $('rec-date').value = todayStr();
+  resetTrainingTimes();
   $('rec-deload').checked = false;
   $('rec-note').value = '';
   $('btn-cancel-edit').hidden = true;
@@ -357,17 +514,23 @@ function resetRecordForm() {
   $('rec-error').hidden = true;
   clearExercises();
   updateRecordEmptyState();
+  updateRecordActions();
+  draftStatus('草稿自动保存到此设备；逐个添加动作，最后完成本次训练。');
 }
 
 function fillWorkout(w) {
   state.editingId = w.id;
+  state.draftWorkoutId = w.id;
+  state.recordMode = w.inProgress ? 'session' : 'edit';
   $('rec-date').value = w.date;
+  $('rec-start-time').value = cleanTime(w.startTime);
+  $('rec-end-time').value = cleanTime(w.endTime);
+  $('rec-end-next-day').checked = w.endNextDay === true;
+  updateTrainingDuration();
   $('rec-deload').checked = !!w.isDeload;
   $('rec-note').value = w.note || '';
   $('btn-cancel-edit').hidden = false;
-  const banner = $('rec-edit-banner');
-  banner.hidden = false;
-  banner.querySelector('b').textContent = shortDate(w.date);
+  updateRecordActions();
   clearExercises();
   for (const ex of w.exercises) {
     addExerciseCard(ex.name, ex.muscleGroups, ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rpe: s.rpe == null ? '' : s.rpe, drops: s.drops })));
@@ -505,6 +668,9 @@ function updateSubtotal(card) {
 
 function collectRecord() {
   const date = $('rec-date').value;
+  const startTime = $('rec-start-time').value;
+  const endTime = $('rec-end-time').value;
+  const endNextDay = $('rec-end-next-day').checked;
   const isDeload = $('rec-deload').checked;
   const note = $('rec-note').value.trim();
   const exercises = [];
@@ -573,10 +739,16 @@ function collectRecord() {
     exercises.push({ id: uid('e'), name, muscleGroups: groups, sets });
   });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) && !error) error = '请选择训练日期';
-  return { ok: !error, error, date, isDeload, note, exercises };
+  if ((startTime && !cleanTime(startTime)) || (endTime && !cleanTime(endTime))) error = '请填写有效的训练时间';
+  const duration = trainingMinutes(startTime, endTime, endNextDay);
+  if (duration !== null && duration <= 0) error = '结束时间须晚于开始时间；跨午夜训练请勾选「次日结束」';
+  if (endNextDay && !endTime) error = '勾选次日结束后，请填写结束时间';
+  return { ok: !error, error, date, startTime, endTime, endNextDay, isDeload, note, exercises };
 }
 
-function saveWorkout() {
+async function saveWorkout(finish = false) {
+  if (savingWorkout || !currentUser || !data) return;
+  const completing = finish || state.recordMode === 'edit';
   const res = collectRecord();
   const errEl = $('rec-error');
   if (!res.ok) {
@@ -585,28 +757,62 @@ function saveWorkout() {
     return;
   }
   errEl.hidden = true;
+  persistRecordDraft();
+  const owner = currentUser.id;
+  const nextData = { ...data, workouts: [...data.workouts], customExercises: [...data.customExercises] };
   const known = allExercises().map(e => e.name);
   for (const ex of res.exercises) {
-    if (!known.includes(ex.name) && !data.customExercises.some(x => x.name === ex.name)) {
-      data.customExercises.push({ id: uid('x'), name: ex.name, muscleGroups: ex.muscleGroups });
+    if (!known.includes(ex.name) && !nextData.customExercises.some(x => x.name === ex.name)) {
+      nextData.customExercises.push({ id: uid('x'), name: ex.name, muscleGroups: ex.muscleGroups });
     }
   }
   const workout = {
-    id: state.editingId || uid('w'),
+    ...(data.workouts.find(w => w.id === state.editingId) || {}),
+    id: state.editingId || state.draftWorkoutId || uid('w'),
     date: res.date,
+    inProgress: !completing,
+    startTime: res.startTime,
+    endTime: res.endTime,
+    endNextDay: res.endNextDay,
     isDeload: res.isDeload,
     note: res.note,
     exercises: res.exercises,
   };
-  if (state.editingId) {
-    const i = data.workouts.findIndex(w => w.id === state.editingId);
-    if (i >= 0) data.workouts[i] = workout;
-  } else {
-    data.workouts.push(workout);
+  const i = nextData.workouts.findIndex(w => w.id === workout.id);
+  if (i >= 0) nextData.workouts[i] = workout;
+  else nextData.workouts.push(workout);
+  savingWorkout = true;
+  $('record-view').inert = true;
+  $('tabbar').inert = true;
+  $('btn-save').disabled = true;
+  $('btn-save').textContent = '正在保存…';
+  try {
+    const saved = await save(nextData);
+    if (!currentUser || currentUser.id !== owner || draftOwner !== owner) return;
+    if (saved) {
+      data = nextData;
+      if (completing) {
+        resetRecordForm();
+        toast(`本次训练已保存：${workout.exercises.length} 个动作 ✓`);
+      } else {
+        state.editingId = workout.id;
+        state.draftWorkoutId = workout.id;
+        updateRecordActions();
+        persistRecordDraft();
+        toast('进度已保存，添加下一个动作会归入本次训练');
+      }
+    } else {
+      errEl.textContent = '云端保存失败，填写内容已保留，请检查网络后重试。';
+      errEl.hidden = false;
+      persistRecordDraft();
+    }
+  } finally {
+    savingWorkout = false;
+    $('record-view').inert = false;
+    $('tabbar').inert = false;
+    $('btn-save').disabled = false;
+    updateRecordActions();
   }
-  save();
-  toast('训练已保存 ✓');
-  resetRecordForm();
 }
 
 function copyLastWorkout() {
@@ -615,10 +821,13 @@ function copyLastWorkout() {
     .map((w, i) => ({ w, i }))
     .sort((a, b) => a.w.date.localeCompare(b.w.date) || a.i - b.i);
   const last = sorted[sorted.length - 1].w;
+  state.draftWorkoutId = null;
   $('rec-date').value = todayStr();
+  resetTrainingTimes();
   $('rec-deload').checked = false;
   $('rec-note').value = '';
   state.editingId = null;
+  state.recordMode = 'session';
   $('btn-cancel-edit').hidden = true;
   $('rec-edit-banner').hidden = true;
   $('rec-error').hidden = true;
@@ -627,6 +836,7 @@ function copyLastWorkout() {
     addExerciseCard(ex.name, ex.muscleGroups, ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rpe: s.rpe == null ? '' : s.rpe, drops: s.drops })));
   }
   updateRecordEmptyState();
+  updateRecordActions();
   toast('已复制上次训练，日期已设为今天');
 }
 
@@ -691,6 +901,8 @@ function createCustomExercise(fromPicker) {
 
 /* ===== ⑥ 历史视图 ===== */
 function renderHistory() {
+  state.mergeIds = state.mergeIds.filter(id => data.workouts.some(w => w.id === id));
+  updateMergeActions();
   const q = state.historySearch.trim().toLowerCase();
   const list = $('history-list');
   const workouts = sortedWorkoutsDesc().filter(w => !q || w.exercises.some(ex => ex.name.toLowerCase().includes(q)));
@@ -747,20 +959,81 @@ function historyCardHtml(w) {
   }).join('');
   return `
     <div class="card hist-card" data-id="${w.id}">
+      <label class="hist-select"><input type="checkbox" data-select-workout="${escapeHtml(w.id)}"${state.mergeIds.includes(w.id) ? ' checked' : ''}> 选择合并</label>
       <button type="button" class="hist-head">
         <span class="hist-date"><b>${shortDate(w.date)}</b> ${weekday(w.date)}</span>
         <span class="hist-summary">${w.exercises.length} 个动作 · ${totalSets} 组 · 总容量 ${fmtNum(volume)} kg</span>
-        <span class="hist-tags">${w.isDeload ? '<i class="tag deload">减载</i>' : ''}${groups.map(g => `<i class="tag">${escapeHtml(g)}</i>`).join('')}<i class="chev">▾</i></span>
+        <span class="hist-tags">${w.inProgress ? '<i class="tag">进行中</i>' : ''}${w.isDeload ? '<i class="tag deload">减载</i>' : ''}${groups.map(g => `<i class="tag">${escapeHtml(g)}</i>`).join('')}<i class="chev">▾</i></span>
       </button>
       <div class="hist-body" hidden>
+        ${trainingTimeLabel(w) ? `<div class="hist-time">${trainingTimeLabel(w)}</div>` : ''}
         ${w.note ? `<div class="hist-note">备注：${escapeHtml(w.note)}</div>` : ''}
         ${rows}
+        ${w.sourceWorkouts ? `<details class="merge-sources"><summary>合并来源（${w.sourceWorkouts.length} 条原记录）</summary>${w.sourceWorkouts.map(source => `<div class="hist-note">${escapeHtml(source.exercises.map(ex => ex.name).join('、'))}${trainingTimeLabel(source) ? ' · ' + trainingTimeLabel(source) : ''}${source.note ? '<br>备注：' + escapeHtml(source.note) : ''}${source.isDeload ? ' · 减载/恢复' : ''}</div>`).join('')}</details>` : ''}
         <div class="hist-actions">
-          <button type="button" class="btn sm" data-act="edit">编辑</button>
+          <button type="button" class="btn sm" data-act="edit">${w.inProgress ? '继续本次训练' : '编辑'}</button>
           <button type="button" class="btn sm danger-outline" data-act="delete">删除</button>
         </div>
       </div>
     </div>`;
+}
+
+function updateMergeActions() {
+  $('btn-merge-workouts').disabled = state.mergeIds.length < 2;
+  $('btn-merge-workouts').textContent = `合并已选训练（${state.mergeIds.length}）`;
+  $('btn-clear-selection').hidden = !state.mergeIds.length;
+}
+function combineWorkouts(workouts) {
+  const exercises = [];
+  for (const w of workouts) for (const ex of w.exercises) {
+    const existing = exercises.find(item => item.name === ex.name);
+    if (existing) {
+      existing.sets.push(...ex.sets);
+      existing.muscleGroups = [...new Set([...existing.muscleGroups, ...ex.muscleGroups])];
+    } else exercises.push({ ...ex, sets: [...ex.sets], muscleGroups: [...ex.muscleGroups] });
+  }
+  const startTimes = workouts.map(w => cleanTime(w.startTime)).filter(Boolean).sort();
+  const endTimes = workouts.filter(w => cleanTime(w.endTime)).map(w => ({
+    time: w.endTime, minutes: Number(w.endTime.slice(0, 2)) * 60 + Number(w.endTime.slice(3)) + (w.endNextDay ? 1440 : 0),
+  })).sort((a, b) => b.minutes - a.minutes);
+  const sources = workouts.flatMap(w => w.sourceWorkouts || [w]);
+  return {
+    ...workouts[0], inProgress: false, exercises,
+    startTime: startTimes[0] || '', endTime: endTimes[0]?.time || '',
+    endNextDay: !!endTimes.length && endTimes[0].minutes >= 1440,
+    isDeload: workouts.every(w => w.isDeload),
+    note: [...new Set(workouts.map(w => w.note).filter(Boolean))].join('\n').slice(0, 500),
+    sourceWorkouts: sources,
+  };
+}
+async function mergeSelectedWorkouts() {
+  if (savingWorkout || !currentUser || !data) return;
+  const selected = data.workouts.filter(w => state.mergeIds.includes(w.id));
+  if (selected.length < 2) return;
+  if (new Set(selected.map(w => w.date)).size !== 1) { toast('请选择同一天、属于同一次训练的记录', 'warn'); return; }
+  if (selected.some(w => w.inProgress || w.id === state.editingId)) { toast('请先完成或退出所选训练的编辑，再合并', 'warn'); return; }
+  if (!confirm(`将 ${selected[0].date} 的 ${selected.length} 条记录合并为一次训练？所有动作和组都会保留，同名动作的组会合并，原记录信息保留在合并来源中。`)) return;
+  const owner = currentUser.id;
+  const merged = combineWorkouts(selected);
+  const selectedIds = new Set(selected.map(w => w.id));
+  const nextData = { ...data, workouts: data.workouts.filter(w => !selectedIds.has(w.id)) };
+  nextData.workouts.push(merged);
+  savingWorkout = true;
+  $('main').inert = true;
+  $('tabbar').inert = true;
+  try {
+    if (await save(nextData)) {
+      if (!currentUser || currentUser.id !== owner) return;
+      data = nextData;
+      state.mergeIds = [];
+      renderHistory();
+      toast(`已合并为一次训练：${merged.exercises.length} 个动作`);
+    }
+  } finally {
+    savingWorkout = false;
+    $('main').inert = false;
+    $('tabbar').inert = false;
+  }
 }
 
 function startEditWorkout(id) {
@@ -1694,6 +1967,9 @@ async function loadUsername() {
 }
 
 async function enterApp() {
+  persistRecordDraft();
+  draftOwner = null;
+  state.mergeIds = [];
   try {
     data = await loadCloudData();
   } catch (e) {
@@ -1707,9 +1983,11 @@ async function enterApp() {
     appInited = true;
     init();
   } else {
-    resetRecordForm();
+    resetRecordForm(false);
     renderHistory();
   }
+  restoreRecordDraft();
+  draftOwner = currentUser.id;
 }
 
 async function doLogin(username, password) {
@@ -1770,7 +2048,9 @@ async function handleAuthSubmit(e) {
 }
 
 async function doLogout() {
+  persistRecordDraft();
   await db.auth.signOut();
+  draftOwner = null;
   data = null;
   currentUser = null;
   currentUsername = '';
@@ -1794,6 +2074,8 @@ async function boot() {
     initSupabase();
     db.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
+        persistRecordDraft();
+        draftOwner = null;
         data = null; currentUser = null; currentUsername = '';
         const ub = $('user-bar'); if (ub) ub.hidden = true;
         showAuth('login');
@@ -1832,9 +2114,18 @@ function init() {
 
   // 记录视图
   $('btn-add-ex').addEventListener('click', openPicker);
-  $('btn-save').addEventListener('click', saveWorkout);
+  $('btn-save').addEventListener('click', () => saveWorkout(false));
+  $('btn-finish').addEventListener('click', () => saveWorkout(true));
+  ['rec-start-time', 'rec-end-time', 'rec-end-next-day'].forEach(id => {
+    $(id).addEventListener('input', updateTrainingDuration);
+  });
   $('btn-copy-last').addEventListener('click', copyLastWorkout);
   $('btn-cancel-edit').addEventListener('click', () => {
+    if (state.recordMode === 'session') {
+      persistRecordDraft();
+      switchTab('history');
+      return;
+    }
     resetRecordForm();
     toast('已取消编辑');
   });
@@ -1842,6 +2133,15 @@ function init() {
     const err = $('rec-error');
     if (!err.hidden) err.hidden = true;
   });
+  $('record-view').addEventListener('input', persistRecordDraft);
+  $('record-view').addEventListener('change', persistRecordDraft);
+  // 冒泡阶段在动作、组和递减段增删完成后保存，也覆盖 Enter 新增组。
+  document.addEventListener('click', persistRecordDraft);
+  document.addEventListener('keydown', persistRecordDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistRecordDraft();
+  });
+  window.addEventListener('pagehide', persistRecordDraft);
 
   const exList = $('ex-list');
   exList.addEventListener('click', e => {
@@ -1962,6 +2262,15 @@ function init() {
   });
 
   // 历史
+  $('btn-merge-workouts').addEventListener('click', mergeSelectedWorkouts);
+  $('btn-clear-selection').addEventListener('click', () => { state.mergeIds = []; renderHistory(); });
+  $('history-list').addEventListener('change', e => {
+    const id = e.target.dataset.selectWorkout;
+    if (!id) return;
+    state.mergeIds = state.mergeIds.filter(selected => selected !== id);
+    if (e.target.checked) state.mergeIds.push(id);
+    updateMergeActions();
+  });
   const histSearch = $('hist-search');
   histSearch.addEventListener('input', () => {
     clearTimeout(state.searchTimer);
@@ -2041,7 +2350,7 @@ function init() {
     toast('已清空所有数据');
   });
 
-  resetRecordForm();
+  resetRecordForm(false);
   renderHistory();
 }
 
